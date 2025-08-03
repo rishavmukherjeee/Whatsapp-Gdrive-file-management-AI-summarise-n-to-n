@@ -1,5 +1,18 @@
 
+
 # WhatsApp Drive Automation & AI Summarizer
+
+## Video Walkthrough
+
+Watch the following embedded YouTube video for a working demo of the project:
+
+<a href="https://youtu.be/DcTkqTEnpIc" target="_blank">
+  <img src="https://img.youtube.com/vi/DcTkqTEnpIc/0.jpg" alt="YouTube Video" width="480"/>
+</a>
+
+Or [click here to watch on YouTube](https://youtu.be/DcTkqTEnpIc).
+
+---
 
 ## Overview
 
