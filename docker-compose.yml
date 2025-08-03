@@ -1,0 +1,106 @@
+version: '3.8'
+
+services:
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15
+    container_name: whatsapp-postgres
+    environment:
+      POSTGRES_DB: n8n
+      POSTGRES_USER: n8n
+      POSTGRES_PASSWORD: n8n123
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - whatsapp-network
+
+  # Redis Cache
+  redis:
+    image: redis:7-alpine
+    container_name: whatsapp-redis
+    networks:
+      - whatsapp-network
+
+  # n8n Workflow Engine
+  n8n:
+    image: n8nio/n8n
+    container_name: whatsapp-n8n
+    ports:
+      - "5678:5678"
+    environment:
+      - DB_TYPE=postgresdb
+      - DB_POSTGRESDB_HOST=postgres
+      - DB_POSTGRESDB_PORT=5432
+      - DB_POSTGRESDB_DATABASE=n8n
+      - DB_POSTGRESDB_USER=n8n
+      - DB_POSTGRESDB_PASSWORD=n8n123
+      - QUEUE_BULL_REDIS_HOST=redis
+      - N8N_BASIC_AUTH_ACTIVE=false
+      - N8N_HOST=localhost
+      - N8N_PORT=5678
+      - N8N_PROTOCOL=http
+    volumes:
+      - n8n_data:/home/node/.n8n
+      - ./workflow.json:/tmp/workflow.json
+    depends_on:
+      - postgres
+      - redis
+    networks:
+      - whatsapp-network
+
+  # Auto-import workflow and start tunnel
+  setup:
+    image: alpine:latest
+    container_name: whatsapp-setup
+    depends_on:
+      - n8n
+    volumes:
+      - ./workflow.json:/workflow.json
+    command: |
+      sh -c "
+      echo '🚀 Starting WhatsApp Google Drive Assistant Setup...'
+      
+      # Wait for n8n to be ready
+      echo '⏳ Waiting for n8n to start...'
+      sleep 30
+      
+      # Install curl and localtunnel
+      apk add --no-cache curl nodejs npm
+      npm install -g localtunnel
+      
+      echo '📋 Setup complete! Services running:'
+      echo '  - n8n: http://localhost:5678'
+      echo '  - PostgreSQL: Running'
+      echo '  - Redis: Running'
+      echo ''
+      echo '🔗 Starting public tunnel for webhooks...'
+      
+      # Start localtunnel in background
+      lt --port 5678 --subdomain whatsapp-drive-assistant &
+      
+      echo '✅ All services ready!'
+      echo ''
+      echo '📱 Next steps:'
+      echo '1. Go to http://localhost:5678'
+      echo '2. Import workflow-task2-exact.json'
+      echo '3. Activate the workflow'
+      echo '4. Configure Twilio webhook with tunnel URL'
+      echo ''
+      echo '💬 Test commands:'
+      echo '  - LIST /ProjectX'
+      echo '  - SUMMARY /Documents'
+      echo '  - HELP'
+      
+      # Keep container running
+      tail -f /dev/null
+      "
+    networks:
+      - whatsapp-network
+
+volumes:
+  postgres_data:
+  n8n_data:
+
+networks:
+  whatsapp-network:
+    driver: bridge

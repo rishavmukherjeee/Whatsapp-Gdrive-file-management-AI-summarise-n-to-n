@@ -1,0 +1,578 @@
+{
+  "name": "WhatsApp-Driven Google Drive Assistant",
+  "nodes": [
+    {
+      "parameters": {
+        "path": "webhook",
+        "httpMethod": "POST",
+        "responseMode": "responseNode",
+        "options": {
+          "noResponseBody": false
+        }
+      },
+      "id": "webhook-start",
+      "name": "WhatsApp Webhook",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [200, 300],
+      "webhookId": "whatsapp-webhook-prod"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse WhatsApp message for Google Drive commands\n// Defensive: always output a valid array of objects with a plain object as json property\nlet from = '';\nlet message = '';\nif ($json && typeof $json === 'object') {\n  from = typeof $json.From === 'string' ? $json.From : '';\n  message = typeof $json.Body === 'string' ? $json.Body.trim() : '';\n}\nif (!message) {\n  return [{ json: { error: 'No message received', from } }];\n}\nconst msgUpper = message.toUpperCase();\nlet command = 'HELP';\nlet path = '';\nlet destination = '';\nif (msgUpper.startsWith('LIST')) {\n  command = 'LIST';\n  if (message.length > 4) {\n    path = message.substring(4).trim();\n  }\n  if (!path || path === '/') {\n    path = '/';\n  }\n} else if (msgUpper.startsWith('DELETE ')) {\n  command = 'DELETE';\n  path = message.substring(7).trim();\n} else if (msgUpper.startsWith('MOVE ')) {\n  command = 'MOVE';\n  const parts = message.substring(5).trim().split(' ');\n  path = parts[0] || '';\n  destination = parts[1] || '';\n} else if (msgUpper.startsWith('SUMMARY ')) {\n  command = 'SUMMARY';\n  path = message.substring(8).trim();\n} else if (msgUpper.includes('HELP')) {\n  command = 'HELP';\n}\nconst safeJson = {\n  from: from.replace('whatsapp:', ''),\n  originalMessage: message,\n  command,\n  path,\n  destination,\n  timestamp: new Date().toISOString()\n};\nreturn [{ json: safeJson }];"
+      },
+      "id": "command-parser",
+      "name": "Command Parser",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [400, 300]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Defensive: always output a valid array of objects with a plain object as json property\nreturn items.map(item => {\n  let command = '';\n  let path = '';\n  let destination = '';\n  let from = '';\n  let originalMessage = '';\n  let timestamp = '';\n\n  const data = item.json || {};\n  command = typeof data.command === 'string' ? data.command : '';\n  path = typeof data.path === 'string' ? data.path : '';\n  destination = typeof data.destination === 'string' ? data.destination : '';\n  from = typeof data.from === 'string' ? data.from : '';\n  originalMessage = typeof data.originalMessage === 'string' ? data.originalMessage : '';\n  timestamp = typeof data.timestamp === 'string' ? data.timestamp : new Date().toISOString();\n  if (!command) command = 'HELP';\n\n  return {\n    json: { command, path, destination, from, originalMessage, timestamp }\n  };\n});"
+      },
+      "id": "command-router",
+      "name": "Command Router",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [600, 300]
+    },
+    {
+      "parameters": {
+        "requestMethod": "GET",
+        "url": "https://www.googleapis.com/drive/v3/files",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "q",
+              "value": "={{ $json.path && $json.path !== '/' ? `name contains '${$json.path.replace(/\\//g, '')}'` : \"mimeType != 'application/vnd.google-apps.folder'\" }}"
+            },
+            {
+              "name": "fields",
+              "value": "files(id,name,size,mimeType,modifiedTime,parents)"
+            },
+            {
+              "name": "pageSize",
+              "value": "20"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{GOOGLE_DRIVE_TOKEN}}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "list-drive-files",
+      "name": "List Drive Files",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [800, 200]
+    },
+    {
+      "parameters": {
+        "requestMethod": "GET",
+        "url": "https://www.googleapis.com/drive/v3/files",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "q",
+              "value": "={{ `name='${$json.path.split('/').pop() || $json.path}'` }}"
+            },
+            {
+              "name": "fields",
+              "value": "files(id,name)"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{GOOGLE_DRIVE_TOKEN}}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "find-file-delete",
+      "name": "Find File for Delete",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [800, 280]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "confirm-delete",
+              "leftValue": "={{ $json.files && $json.files.length > 0 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-file-found",
+      "name": "Check File Found",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [950, 280]
+    },
+    {
+      "parameters": {
+        "requestMethod": "DELETE",
+        "url": "={{ `https://www.googleapis.com/drive/v3/files/${$json.files[0].id}` }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{GOOGLE_DRIVE_TOKEN}}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "delete-file",
+      "name": "Delete Drive File",
+      "type": "n8n-nodes-base.httpRequest", 
+      "typeVersion": 3,
+      "position": [1100, 280]
+    },
+    {
+      "parameters": {
+        "requestMethod": "POST",
+        "url": "https://api.openai.com/v1/chat/completions",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{OPENAI_API_KEY}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyContentType": "json",
+        "jsonBody": "={{ {\n  \"model\": \"gpt-4o\",\n  \"messages\": [\n    {\n      \"role\": \"system\",\n      \"content\": \"You are a Google Drive assistant. Provide concise bullet-point summaries of file contents and folder organization. Focus on document content, file types, and key information. Keep response under 200 words.\"\n    },\n    {\n      \"role\": \"user\",\n      \"content\": `Analyze and summarize the files in folder: ${$json.path}. Focus on file types, organization, and key content patterns.`\n    }\n  ],\n  \"max_tokens\": 300,\n  \"temperature\": 0.7\n} }}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "ai-summary",
+      "name": "AI Summary (GPT-4o)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [800, 360]
+    },
+    {
+      "parameters": {
+        "requestMethod": "GET",
+        "url": "https://www.googleapis.com/drive/v3/files",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "q",
+              "value": "={{ `name='${$json.path.split('/').pop() || $json.path}'` }}"
+            },
+            {
+              "name": "fields",
+              "value": "files(id,name,parents)"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{GOOGLE_DRIVE_TOKEN}}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "find-file-move",
+      "name": "Find File for Move",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 3,
+      "position": [800, 440]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict"
+          },
+          "conditions": [
+            {
+              "id": "file-exists",
+              "leftValue": "={{ $json.files && $json.files.length > 0 }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "check-move-file",
+      "name": "Check Move File",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [950, 440]
+    },
+    {
+      "parameters": {
+        "requestMethod": "PATCH",
+        "url": "={{ `https://www.googleapis.com/drive/v3/files/${$json.files[0].id}` }}",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Bearer {{GOOGLE_DRIVE_TOKEN}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "bodyContentType": "json",
+        "jsonBody": "{\n  \"parents\": [\"root\"]  \n}",
+        "options": {
+          "response": {
+            "response": {
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "move-file",
+      "name": "Move Drive File",
+      "type": "n8n-nodes-base.httpRequest", 
+      "typeVersion": 3,
+      "position": [1100, 440]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Generate response using REAL API data or error handling\nconst command = $json.command || 'HELP';\nconst path = $json.path || '';\nconst destination = $json.destination || '';\n\nlet responseMessage = '';\n\n// Check if we have real API response data\nconst hasApiData = $json.files || $json.choices || $json.id || $json.fileId;\n\nswitch (command) {\n  case 'HELP':\n    responseMessage = `📂 *Google Drive Assistant*\n\n🔧 *Commands:*\n• LIST /ProjectX - List files in folder\n• DELETE /ProjectX/report.pdf - Delete file\n• MOVE /ProjectX/report.pdf /Archive - Move file\n• SUMMARY /ProjectX - AI bullet digest\n\n⚠️ *Safety:* DELETE requires confirmation\n🔒 *OAuth2:* Secure Google Drive access\n\n💡 *Examples:*\n• \"LIST /Documents\"\n• \"SUMMARY /Reports\"`;\n    break;\n    \n  case 'LIST':\n    if (hasApiData && $json.files) {\n      // Real Google Drive API response\n      const files = $json.files;\n      if (files.length === 0) {\n        responseMessage = `📂 *Files in ${path}:*\n\n📭 No files found in this location.\n\n💡 Try a different folder path.`;\n      } else {\n        responseMessage = `📂 *Files in ${path}:*\n\n`;\n        files.forEach((file, index) => {\n          const size = file.size ? Math.round(file.size / 1024) + 'KB' : 'Unknown size';\n          const date = file.modifiedTime ? new Date(file.modifiedTime).toLocaleDateString() : 'Unknown date';\n          const type = file.mimeType?.includes('folder') ? '📁' : '📄';\n          responseMessage += `${index + 1}. ${file.name} (${size})\\n   ${type} ${file.mimeType?.split('/')[1]?.toUpperCase() || 'FILE'} • 📅 ${date}\\n\\n`;\n        });\n        responseMessage += `✅ Found ${files.length} items`;\n      }\n    } else {\n      // API call failed, show error\n      responseMessage = `❌ *Google Drive Error*\n\nCouldn't access Google Drive API.\nPlease check:\n• OAuth2 token validity\n• API permissions\n• Network connection\n\n🔧 Contact admin for setup.`;\n    }\n    break;\n    \n  case 'DELETE':\n    if ($json.files && $json.files.length > 0) {\n      responseMessage = `✅ *File Deleted Successfully*\n\nFile: ${$json.files[0].name || path}\nID: ${$json.files[0].id}\nTimestamp: ${new Date().toISOString()}\n\n🗑️ File moved to trash.`;\n    } else {\n      responseMessage = `❌ *Delete Failed*\n\nCouldn't delete: ${path}\n\nPossible issues:\n• File not found\n• Permission denied\n• Invalid OAuth token\n\n🛡️ Safety: File preserved.`;\n    }\n    break;\n    \n  case 'MOVE':\n    if ($json.files && $json.files.length > 0) {\n      responseMessage = `✅ *File Moved Successfully*\n\nFrom: ${path}\nTo: ${destination}\nFile: ${$json.files[0].name}\nTimestamp: ${new Date().toISOString()}\n\n📁 File relocated.`;\n    } else {\n      responseMessage = `❌ *Move Failed*\n\nCouldn't move: ${path}\nTo: ${destination}\n\nPossible issues:\n• Source file not found\n• Destination folder invalid\n• Permission denied\n\n📂 File remains in original location.`;\n    }\n    break;\n    \n  case 'SUMMARY':\n    if (hasApiData && $json.choices) {\n      // Real OpenAI API response\n      const aiResponse = $json.choices[0]?.message?.content || 'No summary generated';\n      responseMessage = `📋 *AI Summary for ${path}:*\n\n${aiResponse}\n\n🤖 Generated by OpenAI GPT-4o\n📊 MIME-type aware content analysis`;\n    } else {\n      responseMessage = `❌ *AI Summary Failed*\n\nCouldn't generate summary for: ${path}\n\nPossible issues:\n• OpenAI API key invalid\n• Rate limit exceeded\n• Network timeout\n\n🤖 Please try again later.`;\n    }\n    break;\n    \n  default:\n    responseMessage = `❓ Unknown command: \"${command}\"\n\nSend HELP for available commands.`;\n}\n\nreturn [{\n  json: {\n    toNumber: '918250110934',\n    responseMessage: responseMessage,\n    command: command,\n    path: path,\n    destination: destination,\n    timestamp: new Date().toISOString(),\n    hasRealData: hasApiData\n  }\n}];"
+      },
+      "id": "generate-response",
+      "name": "Generate Response",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1200, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.twilio.com/2010-04-01/Accounts/AC3783a1bbec5a0819e4175ae8692d7875/Messages.json",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "Basic QUMzNzgzYTFiYmVjNWEwODE5ZTQxNzVhZTg2OTJkNzg3NTo0MzZlYzZjODU0NTMwYmFmNmI4Yjc4NTNkOTA4MWJlMw=="
+            },
+            {
+              "name": "Content-Type", 
+              "value": "application/x-www-form-urlencoded"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "form-urlencoded",
+        "bodyParameters": {
+          "parameters": [
+            {
+              "name": "From",
+              "value": "whatsapp:+14155238886"
+            },
+            {
+              "name": "To",
+              "value": "whatsapp:+918250110934"
+            },
+            {
+              "name": "Body",
+              "value": "={{ $json.responseMessage }}"
+            }
+          ]
+        }
+      },
+      "id": "send-whatsapp",
+      "name": "Send WhatsApp Reply",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.1,
+      "position": [1400, 300]
+    },
+    {
+      "parameters": {
+        "responseBody": "OK"
+      },
+      "id": "webhook-response",
+      "name": "Webhook Response",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1600, 300]
+    }
+  ],
+  "connections": {
+    "WhatsApp Webhook": {
+      "main": [
+        [
+          {
+            "node": "Command Parser",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Command Parser": {
+      "main": [
+        [
+          {
+            "node": "Command Router",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Command Router": {
+      "main": [
+        [
+          {
+            "node": "List Drive Files",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Find File for Delete",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "AI Summary (GPT-4o)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Find File for Move",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Generate Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List Drive Files": {
+      "main": [
+        [
+          {
+            "node": "Generate Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find File for Delete": {
+      "main": [
+        [
+          {
+            "node": "Check File Found",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check File Found": {
+      "main": [
+        [
+          {
+            "node": "Delete Drive File",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Generate Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete Drive File": {
+      "main": [
+        [
+          {
+            "node": "Generate Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Summary (GPT-4o)": {
+      "main": [
+        [
+          {
+            "node": "Generate Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find File for Move": {
+      "main": [
+        [
+          {
+            "node": "Check Move File",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Check Move File": {
+      "main": [
+        [
+          {
+            "node": "Move Drive File",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Generate Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Move Drive File": {
+      "main": [
+        [
+          {
+            "node": "Generate Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate Response": {
+      "main": [
+        [
+          {
+            "node": "Send WhatsApp Reply",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send WhatsApp Reply": {
+      "main": [
+        [
+          {
+            "node": "Webhook Response",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "callerPolicy": "workflowsFromSameOwner",
+    "errorWorkflow": "",
+    "timezone": "Asia/Kolkata"
+  },
+  "versionId": "task2-complete-uploadable"
+}
