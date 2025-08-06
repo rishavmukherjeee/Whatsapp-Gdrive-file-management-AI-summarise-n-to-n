@@ -3,6 +3,15 @@
 
 ## Overview
 
+
+## Video Walkthrough
+
+For a step-by-step video guide, watch the following embedded YouTube video:
+
+<a href="https://youtu.be/DcTkqTEnpIc" target="_blank">
+  <img src="https://img.youtube.com/vi/DcTkqTEnpIc/0.jpg" alt="YouTube Video" width="480"/>
+</a>
+
 This project automates file management between WhatsApp storage (your WhatsApp media folder or backup), Google Drive (cloud storage), and uses ChatGPT (OpenAI's conversational AI) for summarization and chat help. It allows you to:
 
 - **List** files from your WhatsApp drive (local folder or backup)
@@ -81,14 +90,6 @@ README.md               # Project documentation
      ```powershell
      docker-compose down
      ```
-
-## Video Walkthrough
-
-For a step-by-step video guide, watch the following embedded YouTube video:
-
-<a href="https://youtu.be/DcTkqTEnpIc" target="_blank">
-  <img src="https://img.youtube.com/vi/DcTkqTEnpIc/0.jpg" alt="YouTube Video" width="480"/>
-</a>
 
 Or [click here to watch on YouTube](https://youtu.be/DcTkqTEnpIc).
 
